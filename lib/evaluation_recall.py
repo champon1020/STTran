@@ -76,7 +76,6 @@ class BasicSceneGraphEvaluator:
                                             pred['contacting_distribution'][pred['im_idx'] == idx].cpu().numpy()), axis=1)
 
             if self.mode == 'predcls':
-
                 pred_entry = {
                     'pred_boxes': pred['boxes'][:,1:].cpu().clone().numpy(),
                     'pred_classes': pred['labels'].cpu().clone().numpy(),

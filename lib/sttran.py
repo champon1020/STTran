@@ -343,4 +343,3 @@ class STTran(nn.Module):
         entry["contacting_distribution"] = torch.sigmoid(entry["contacting_distribution"])
 
         return entry
-

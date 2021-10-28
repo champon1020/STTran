@@ -32,6 +32,7 @@ class Config(object):
         """
         parser = ArgumentParser(description='training code')
         parser.add_argument('-mode', dest='mode', help='predcls/sgcls/sgdet', default='predcls', type=str)
+        parser.add_argument("-phrdet_mode", action='store_true')
         parser.add_argument('-save_path', default='data/', type=str)
         parser.add_argument('-model_path', default=None, type=str)
         parser.add_argument('-data_path', default='/data/scene_understanding/action_genome/', type=str)
