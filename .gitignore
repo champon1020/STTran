@@ -5,4 +5,6 @@ data/predcls.tar
 data/glove*
 dataloader/object_bbox_and_relationship_filtersmall.pkl
 fasterRCNN/models/faster_rcnn_ag.pth
-~
+
+fasterRCNN/lib/build
+fasterRCNN/lib/model

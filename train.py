@@ -10,6 +10,7 @@ import pandas as pd
 import copy
 
 from dataloader.action_genome import AG, cuda_collate_fn
+from dataloader.home_action_genome import HAG
 from lib.object_detector import detector
 from lib.config import Config
 from lib.evaluation_recall import BasicSceneGraphEvaluator
@@ -26,34 +27,46 @@ for i in conf.args:
     print(i,':', conf.args[i])
 """-----------------------------------------------------------------------------------------"""
 
-AG_dataset_train = AG(mode="train", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
+if conf.dataset == 'ag':
+    dataset_train = AG(mode="train", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
                       filter_small_box=False if conf.mode == 'predcls' else True)
-dataloader_train = torch.utils.data.DataLoader(AG_dataset_train, shuffle=True, num_workers=4,
+    dataloader_train = torch.utils.data.DataLoader(dataset_train, shuffle=True, num_workers=4,
                                                collate_fn=cuda_collate_fn, pin_memory=False)
-AG_dataset_test = AG(mode="test", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
+    dataset_test = AG(mode="test", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
                      filter_small_box=False if conf.mode == 'predcls' else True)
-dataloader_test = torch.utils.data.DataLoader(AG_dataset_test, shuffle=False, num_workers=4,
+    dataloader_test = torch.utils.data.DataLoader(dataset_test, shuffle=False, num_workers=4,
                                               collate_fn=cuda_collate_fn, pin_memory=False)
+elif conf.dataset == 'hag':
+    dataset_train = HAG(mode="train", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
+                    filter_small_box=False)
+    dataloader_train = torch.utils.data.DataLoader(dataset_train, shuffle=True, num_workers=4,
+                                               collate_fn=cuda_collate_fn, pin_memory=False)
+    dataset_test = HAG(mode="test", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
+                    filter_small_box=False)
+    dataloader_test = torch.utils.data.DataLoader(dataset_test, shuffle=False, num_workers=4,
+                                              collate_fn=cuda_collate_fn, pin_memory=False)
+else:
+    raise ValueError('not supported dataset type:', conf.dataset)
 
 gpu_device = torch.device("cuda:0")
 # freeze the detection backbone
-object_detector = detector(train=True, object_classes=AG_dataset_train.object_classes, use_SUPPLY=True, mode=conf.mode).to(device=gpu_device)
+object_detector = detector(train=True, object_classes=dataset_train.object_classes, use_SUPPLY=True, mode=conf.mode).to(device=gpu_device)
 object_detector.eval()
 
 model = STTran(mode=conf.mode,
-               attention_class_num=len(AG_dataset_train.attention_relationships),
-               spatial_class_num=len(AG_dataset_train.spatial_relationships),
-               contact_class_num=len(AG_dataset_train.contacting_relationships),
-               obj_classes=AG_dataset_train.object_classes,
+               attention_class_num=len(dataset_train.attention_relationships),
+               spatial_class_num=len(dataset_train.spatial_relationships),
+               contact_class_num=len(dataset_train.contacting_relationships),
+               obj_classes=dataset_train.object_classes,
                enc_layer_num=conf.enc_layer,
                dec_layer_num=conf.dec_layer).to(device=gpu_device)
 
 evaluator =BasicSceneGraphEvaluator(mode=conf.mode,
-                                    AG_object_classes=AG_dataset_train.object_classes,
-                                    AG_all_predicates=AG_dataset_train.relationship_classes,
-                                    AG_attention_predicates=AG_dataset_train.attention_relationships,
-                                    AG_spatial_predicates=AG_dataset_train.spatial_relationships,
-                                    AG_contacting_predicates=AG_dataset_train.contacting_relationships,
+                                    AG_object_classes=dataset_train.object_classes,
+                                    AG_all_predicates=dataset_train.relationship_classes,
+                                    AG_attention_predicates=dataset_train.attention_relationships,
+                                    AG_spatial_predicates=dataset_train.spatial_relationships,
+                                    AG_contacting_predicates=dataset_train.contacting_relationships,
                                     iou_threshold=0.5,
                                     constraint='with')
 
@@ -91,7 +104,7 @@ for epoch in range(conf.nepoch):
         im_info = copy.deepcopy(data[1].cuda(0))
         gt_boxes = copy.deepcopy(data[2].cuda(0))
         num_boxes = copy.deepcopy(data[3].cuda(0))
-        gt_annotation = AG_dataset_train.gt_annotations[data[4]]
+        gt_annotation = dataset_train.gt_annotations[data[4]]
 
         # prevent gradients to FasterRCNN
         with torch.no_grad():
@@ -164,7 +177,7 @@ for epoch in range(conf.nepoch):
             im_info = copy.deepcopy(data[1].cuda(0))
             gt_boxes = copy.deepcopy(data[2].cuda(0))
             num_boxes = copy.deepcopy(data[3].cuda(0))
-            gt_annotation = AG_dataset_test.gt_annotations[data[4]]
+            gt_annotation = dataset_test.gt_annotations[data[4]]
 
             entry = object_detector(im_data, im_info, gt_boxes, num_boxes, gt_annotation, im_all=None)
             pred = model(entry)
@@ -174,6 +187,3 @@ for epoch in range(conf.nepoch):
     evaluator.print_stats()
     evaluator.reset_result()
     scheduler.step(score)
-
-
-
