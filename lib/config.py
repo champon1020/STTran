@@ -14,6 +14,7 @@ class Config(object):
         self.model_path = None
         self.data_path = None
         self.datasize = None
+        self.video_id = None
         self.ckpt = None
         self.optimizer = None
         self.bce_loss = None
@@ -38,6 +39,7 @@ class Config(object):
         parser.add_argument('-model_path', default=None, type=str)
         parser.add_argument('-data_path', default='/data/scene_understanding/action_genome/', type=str)
         parser.add_argument('-datasize', dest='datasize', help='mini dataset or whole', default='large', type=str)
+        parser.add_argument('-video_id', dest='video_id', default=None, type=str)
         parser.add_argument('-ckpt', dest='ckpt', help='checkpoint', default=None, type=str)
         parser.add_argument('-optimizer', help='adamw/adam/sgd', default='adamw', type=str)
         parser.add_argument('-lr', dest='lr', help='learning rate', default=1e-5, type=float)

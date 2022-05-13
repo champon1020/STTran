@@ -11,7 +11,7 @@ from fasterRCNN.lib.model.utils.blob import prep_im_for_blob, im_list_to_blob
 
 class AG(Dataset):
 
-    def __init__(self, mode, datasize, data_path=None, filter_nonperson_box_frame=True, filter_small_box=False):
+    def __init__(self, mode, datasize, video_id=None, data_path=None, filter_nonperson_box_frame=True, filter_small_box=False):
 
         root_path = data_path
         self.frames_path = os.path.join(root_path, 'frames/')
@@ -112,6 +112,8 @@ class AG(Dataset):
         filter_nonperson_box_frame = False: still use the frames without person box, FasterRCNN may find the person
         '''
         for i in video_dict.keys():
+            if video_id is not None and i != video_id:
+                continue
             video = []
             gt_annotation_video = []
             for j in video_dict[i]:

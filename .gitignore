@@ -10,3 +10,4 @@ fasterRCNN/lib/build
 fasterRCNN/lib/model
 ~/
 results/
+dataset/

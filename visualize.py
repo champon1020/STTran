@@ -18,6 +18,7 @@ for i in conf.args:
 AG_dataset = AG(
     mode="test",
     datasize=conf.datasize,
+    video_id=conf.video_id,
     data_path=conf.data_path,
     filter_nonperson_box_frame=True,
     filter_small_box=False if conf.mode == "predcls" else True,
