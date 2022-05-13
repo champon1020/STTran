@@ -1,9 +1,13 @@
 import torch
+import cv2
+import os
+import os.path as op
 import torch.nn as nn
 import numpy as np
 from functools import reduce
 from lib.ults.pytorch_misc import intersect_2d, argsort_desc
 from lib.fpn.box_intersections_cpu.bbox import bbox_overlaps
+from PIL import Image
 
 class BasicSceneGraphEvaluator:
     def __init__(self, mode, AG_object_classes, AG_all_predicates, AG_attention_predicates, AG_spatial_predicates, AG_contacting_predicates,
@@ -94,6 +98,264 @@ class BasicSceneGraphEvaluator:
 
             evaluate_from_dict(gt_entry, pred_entry, self.mode, self.result_dict,
                                iou_thresh=self.iou_threshold, method=self.constraint, threshold=self.semithreshold)
+
+    def visualize(self, gt, pred, data_path, text=True, relation=True):
+        label_to_idx, idx_to_label = {}, {}
+        with open(op.join(data_path, "annotations/object_classes.txt"), "r") as file:
+            lines = file.readlines()
+            class_id = 1
+            for line in lines:
+                label_to_idx[line.rstrip()] = class_id
+                idx_to_label[class_id] = line.rstrip()
+                class_id += 1
+        self.idx_to_label = idx_to_label
+
+        predicate_to_idx, idx_to_predicate = {}, {}
+        with open(
+            op.join(data_path, "annotations/relationship_classes.txt"), "r"
+        ) as file:
+            lines = file.readlines()
+            class_id = 0
+            for line in lines:
+                predicate_to_idx[line.rstrip()] = class_id
+                idx_to_predicate[class_id] = line.rstrip()
+                class_id += 1
+        self.idx_to_predicate = idx_to_predicate
+
+        pred['attention_distribution'] = nn.functional.softmax(pred['attention_distribution'], dim=1)
+
+        for idx, frame_gt in enumerate(gt):
+            # generate the ground truth
+            gt_boxes = np.zeros([len(frame_gt), 4]) #now there is no person box! we assume that person box index == 0
+            gt_classes = np.zeros(len(frame_gt))
+            gt_relations = []
+            human_idx = 0
+            gt_classes[human_idx] = 1
+            gt_boxes[human_idx] = frame_gt[0]['person_bbox']
+            for m, n in enumerate(frame_gt[1:]):
+                # each pair
+                gt_boxes[m+1,:] = n['bbox']
+                gt_classes[m+1] = n['class']
+                gt_relations.append([human_idx, m+1, self.AG_all_predicates.index(self.AG_attention_predicates[n['attention_relationship']])]) # for attention triplet <human-object-predicate>_
+                #spatial and contacting relationship could be multiple
+                for spatial in n['spatial_relationship'].numpy().tolist():
+                    gt_relations.append([m+1, human_idx, self.AG_all_predicates.index(self.AG_spatial_predicates[spatial])]) # for spatial triplet <object-human-predicate>
+                for contact in n['contacting_relationship'].numpy().tolist():
+                    gt_relations.append([human_idx, m+1, self.AG_all_predicates.index(self.AG_contacting_predicates[contact])])  # for contact triplet <human-object-predicate>
+
+            gt_entry = {
+                'gt_classes': gt_classes,
+                'gt_relations': np.array(gt_relations),
+                'gt_boxes': gt_boxes,
+            }
+
+            # first part for attention and contact, second for spatial
+
+            rels_i = np.concatenate((pred['pair_idx'][pred['im_idx'] == idx].cpu().clone().numpy(),             #attention
+                                     pred['pair_idx'][pred['im_idx'] == idx].cpu().clone().numpy()[:,::-1],     #spatial
+                                     pred['pair_idx'][pred['im_idx'] == idx].cpu().clone().numpy()), axis=0)    #contacting
+
+
+            pred_scores_1 = np.concatenate((pred['attention_distribution'][pred['im_idx'] == idx].cpu().numpy(),
+                                            np.zeros([pred['pair_idx'][pred['im_idx'] == idx].shape[0], pred['spatial_distribution'].shape[1]]),
+                                            np.zeros([pred['pair_idx'][pred['im_idx'] == idx].shape[0], pred['contacting_distribution'].shape[1]])), axis=1)
+            pred_scores_2 = np.concatenate((np.zeros([pred['pair_idx'][pred['im_idx'] == idx].shape[0], pred['attention_distribution'].shape[1]]),
+                                            pred['spatial_distribution'][pred['im_idx'] == idx].cpu().numpy(),
+                                            np.zeros([pred['pair_idx'][pred['im_idx'] == idx].shape[0], pred['contacting_distribution'].shape[1]])), axis=1)
+            pred_scores_3 = np.concatenate((np.zeros([pred['pair_idx'][pred['im_idx'] == idx].shape[0], pred['attention_distribution'].shape[1]]),
+                                            np.zeros([pred['pair_idx'][pred['im_idx'] == idx].shape[0], pred['spatial_distribution'].shape[1]]),
+                                            pred['contacting_distribution'][pred['im_idx'] == idx].cpu().numpy()), axis=1)
+
+            if self.mode == 'predcls':
+                pred_entry = {
+                    'pred_boxes': pred['boxes'][:,1:].cpu().clone().numpy(),
+                    'pred_classes': pred['labels'].cpu().clone().numpy(),
+                    'pred_rel_inds': rels_i,
+                    'obj_scores': pred['scores'].cpu().clone().numpy(),
+                    'rel_scores': np.concatenate((pred_scores_1, pred_scores_2, pred_scores_3), axis=0)
+                }
+            else:
+                pred_entry = {
+                    'pred_boxes': pred['boxes'][:, 1:].cpu().clone().numpy(),
+                    'pred_classes': pred['pred_labels'].cpu().clone().numpy(),
+                    'pred_rel_inds': rels_i,
+                    'obj_scores': pred['pred_scores'].cpu().clone().numpy(),
+                    'rel_scores': np.concatenate((pred_scores_1, pred_scores_2, pred_scores_3), axis=0)
+                }
+
+            gt_rels = gt_entry['gt_relations']
+            gt_boxes = gt_entry['gt_boxes'].astype(float)
+            gt_classes = gt_entry['gt_classes']
+
+            pred_rel_inds = pred_entry['pred_rel_inds']
+            rel_scores = pred_entry['rel_scores']
+
+
+            pred_boxes = pred_entry['pred_boxes'].astype(float)
+            pred_classes = pred_entry['pred_classes']
+            obj_scores = pred_entry['obj_scores']
+
+            method = self.constraint
+            if method == 'semi':
+                pred_rels = []
+                predicate_scores = []
+                for i, j in enumerate(pred_rel_inds):
+                    if rel_scores[i,0]+rel_scores[i,1] > 0:
+                        # this is the attention distribution
+                        pred_rels.append(np.append(j,rel_scores[i].argmax()))
+                        predicate_scores.append(rel_scores[i].max())
+                    elif rel_scores[i,3]+rel_scores[i,4] > 0:
+                        # this is the spatial distribution
+                        for k in np.where(rel_scores[i]>threshold)[0]:
+                            pred_rels.append(np.append(j, k))
+                            predicate_scores.append(rel_scores[i,k])
+                    elif rel_scores[i,9]+rel_scores[i,10] > 0:
+                        # this is the contact distribution
+                        for k in np.where(rel_scores[i]>threshold)[0]:
+                            pred_rels.append(np.append(j, k))
+                            predicate_scores.append(rel_scores[i,k])
+
+                pred_rels = np.array(pred_rels)
+                predicate_scores = np.array(predicate_scores)
+            elif method == 'no':
+                obj_scores_per_rel = obj_scores[pred_rel_inds].prod(1)
+                overall_scores = obj_scores_per_rel[:, None] * rel_scores
+                score_inds = argsort_desc(overall_scores)[:100]
+                pred_rels = np.column_stack((pred_rel_inds[score_inds[:, 0]], score_inds[:, 1]))
+                predicate_scores = rel_scores[score_inds[:, 0], score_inds[:, 1]]
+            else:
+                pred_rels = np.column_stack((pred_rel_inds, rel_scores.argmax(1))) #1+  dont add 1 because no dummy 'no relations'
+                predicate_scores = rel_scores.max(1)
+
+            if pred_rels.size == 0:
+                return [[]], np.zeros((0,5)), np.zeros(0)
+
+            num_gt_boxes = gt_boxes.shape[0]
+            num_gt_relations = gt_rels.shape[0]
+            assert num_gt_relations != 0
+
+            gt_triplets, gt_triplet_boxes, _ = _triplet(gt_rels[:, 2],
+                                                    gt_rels[:, :2],
+                                                    gt_classes,
+                                                    gt_boxes)
+            num_boxes = pred_boxes.shape[0]
+            assert pred_rels[:,:2].max() < pred_classes.shape[0]
+
+            # Exclude self rels
+            # assert np.all(pred_rels[:,0] != pred_rels[:,ĺeftright])
+            #assert np.all(pred_rels[:,2] > 0)
+
+            cls_scores=None
+            pred_triplets, pred_triplet_boxes, relation_scores = \
+              _triplet(pred_rels[:,2], pred_rels[:,:2], pred_classes, pred_boxes,
+                       rel_scores, cls_scores)
+
+            relation_scores = rel_scores
+            sorted_scores = relation_scores.prod(1)
+            pred_triplets = pred_triplets[sorted_scores.argsort()[::-1],:]
+            pred_triplet_boxes = pred_triplet_boxes[sorted_scores.argsort()[::-1],:]
+            relation_scores = relation_scores[sorted_scores.argsort()[::-1],:]
+            scores_overall = relation_scores.prod(1)
+
+            top = 10
+            frame_name = frame_gt[1]["metadata"]["tag"].split("/")
+            frame_name = "/".join(frame_name[:-2] + frame_name[-1:]) + ".png"
+            video_id = frame_name.split("/")[0]
+            image = Image.open(op.join(data_path, "frames", frame_name))
+            triplets, boxes = pred_triplets[:top], pred_triplet_boxes[:top]
+            for i, (triplet, box) in enumerate(zip(triplets, boxes)):
+                img = np.array(image.copy())
+                if triplet[1].item() == -1:
+                    continue
+                sub, obj = (
+                    self.idx_to_label[triplet[0].item()],
+                    self.idx_to_label[triplet[2].item()],
+                )
+                sub_box, obj_box = (
+                    np.round(box[:4]).astype(int),
+                    np.round(box[4:]).astype(int),
+                )
+                cv2.rectangle(img, sub_box[:2], sub_box[2:], (0, 0, 255), thickness=4)
+                cv2.rectangle(img, obj_box[:2], obj_box[2:], (0, 0, 255), thickness=4)
+
+                basename, ext = op.splitext(frame_name)
+                output_name = op.join("./results", f"{basename}_box{ext}")
+                if not op.exists(op.dirname(output_name)):
+                    os.mkdir(op.dirname(output_name))
+                cv2.imwrite(output_name, img)
+
+            for i, (triplet, box) in enumerate(zip(triplets, boxes)):
+                img = np.array(image.copy())
+                if triplet[1].item() == -1:
+                    continue
+                sub, pre, obj = (
+                    self.idx_to_label[triplet[0].item()],
+                    self.idx_to_predicate[triplet[1].item()],
+                    self.idx_to_label[triplet[2].item()],
+                )
+                sub_box, obj_box = (
+                    np.round(box[:4]).astype(int),
+                    np.round(box[4:]).astype(int),
+                )
+                cv2.rectangle(img, sub_box[:2], sub_box[2:], (0, 0, 255), thickness=2)
+                cv2.rectangle(
+                    img, obj_box[:2], obj_box[2:], (245, 239, 24), thickness=2
+                )
+                if text:
+                    cv2.putText(
+                        img,
+                        text=sub,
+                        org=sub_box[:2] - np.array([0, 5]),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=0.7,
+                        color=(0, 0, 255),
+                        thickness=1,
+                        lineType=cv2.LINE_AA,
+                    )
+                    cv2.putText(
+                        img,
+                        text=obj,
+                        org=obj_box[:2] - np.array([0, 5]),
+                        fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                        fontScale=0.7,
+                        color=(245, 239, 24),
+                        thickness=1,
+                        lineType=cv2.LINE_AA,
+                    )
+
+                sub_center, obj_center = (
+                    (sub_box[:2] + sub_box[2:]) // 2,
+                    (obj_box[:2] + obj_box[2:]) // 2,
+                )
+                if relation:
+                    cv2.line(
+                        img,
+                        sub_center,
+                        obj_center,
+                        color=(0, 255, 0),
+                        thickness=2,
+                        lineType=cv2.LINE_4,
+                        shift=0,
+                    )
+                    if text:
+                        cv2.putText(
+                            img,
+                            text=pre,
+                            org=(sub_center + obj_center) // 2,
+                            fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                            fontScale=0.7,
+                            color=(0, 255, 0),
+                            thickness=1,
+                            lineType=cv2.LINE_AA,
+                        )
+
+                basename, ext = op.splitext(frame_name)
+                output_name = op.join("./results", f"{basename}_rel_top{i}{ext}")
+                if not op.exists(op.dirname(output_name)):
+                    os.mkdir(op.dirname(output_name))
+                cv2.imwrite(output_name, img)
+
+
 
 def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, method=None, threshold = 0.9, **kwargs):
     """
