@@ -8,6 +8,9 @@ fasterRCNN/models/faster_rcnn_ag.pth
 
 fasterRCNN/lib/build
 fasterRCNN/lib/model
-~/
 results/
 dataset/
+
+**/build
+**/.idea
+**/*.egg-info
