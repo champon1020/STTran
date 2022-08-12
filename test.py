@@ -117,9 +117,10 @@ with torch.no_grad():
         evaluator3.evaluate_scene_graph(gt_annotation, dict(pred))
 
 
-print("-------------------------with constraint-------------------------------")
+#print("-------------------------with constraint-------------------------------")
 # evaluator1.print_stats()
-print("-------------------------semi constraint-------------------------------")
+#print("-------------------------semi constraint-------------------------------")
 # evaluator2.print_stats()
 print("-------------------------no constraint-------------------------------")
 evaluator3.print_stats()
+evaluator3.print_video_stats()

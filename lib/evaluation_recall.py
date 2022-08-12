@@ -12,9 +12,16 @@ from PIL import Image
 class BasicSceneGraphEvaluator:
     def __init__(self, mode, AG_object_classes, AG_all_predicates, AG_attention_predicates, AG_spatial_predicates, AG_contacting_predicates,
                  iou_threshold=0.5, constraint=False, semithreshold=None):
+        self.k_list = [1, 3, 5, 10, 20, 50]
         self.result_dict = {}
+        self.tot_result_dict = {}
+        self.video_result_dict = {}
+        self.video_gt_cnt = {}
+
         self.mode = mode
-        self.result_dict[self.mode + '_recall'] = {1:[], 3:[], 5:[], 10: [], 20: [], 50: [], 100: []}
+        #self.result_dict[self.mode + '_recall'] = {1:[], 3:[], 5:[], 10: [], 20: [], 50: [], 100: []}
+        self.result_dict[self.mode + '_recall'] = {k: [] for k in self.k_list}
+
         self.constraint = constraint # semi constraint if True
         self.iou_threshold = iou_threshold
         self.AG_object_classes = AG_object_classes
@@ -25,7 +32,18 @@ class BasicSceneGraphEvaluator:
         self.semithreshold = semithreshold
 
     def reset_result(self):
-        self.result_dict[self.mode + '_recall'] = {1:[], 3:[], 5:[], 10: [], 20: [], 50: [], 100: []}
+        #self.result_dict[self.mode + '_recall'] = {1:[], 3:[], 5:[], 10: [], 20: [], 50: [], 100: []}
+        self.result_dict[self.mode + '_recall'] = {k: [] for k in self.k_list}
+
+    def print_video_stats(self):
+        print('======================' + self.mode + ' video ============================')
+        tot_result_dict = {k: [] for k in self.k_list}
+        for video_id, v in self.video_result_dict.items():
+            for k, vals in v.items():
+                self.video_result_dict[video_id][k] = float(vals) / float(self.video_gt_cnt[video_id])
+                tot_result_dict[k].append(self.video_result_dict[video_id][k])
+        for k, v in tot_result_dict.items():
+            print('R@%i: %f' % (k, np.mean(v)))
 
     def print_stats(self):
         print('======================' + self.mode + '============================')
@@ -38,6 +56,11 @@ class BasicSceneGraphEvaluator:
         pred['attention_distribution'] = nn.functional.softmax(pred['attention_distribution'], dim=1)
 
         for idx, frame_gt in enumerate(gt):
+            video_id = frame_gt[1]["metadata"]["tag"].split("/")[0]
+            if video_id not in self.video_result_dict:
+                self.video_result_dict[video_id] = {k: 0 for k in self.k_list}
+                self.video_gt_cnt[video_id] = 0
+
             # generate the ground truth
             gt_boxes = np.zeros([len(frame_gt), 4]) #now there is no person box! we assume that person box index == 0
             gt_classes = np.zeros(len(frame_gt))
@@ -96,8 +119,15 @@ class BasicSceneGraphEvaluator:
                     'rel_scores': np.concatenate((pred_scores_1, pred_scores_2, pred_scores_3), axis=0)
                 }
 
-            evaluate_from_dict(gt_entry, pred_entry, self.mode, self.result_dict,
+            recalls = evaluate_from_dict(gt_entry, pred_entry, self.mode, self.result_dict, self.k_list,
                                iou_thresh=self.iou_threshold, method=self.constraint, threshold=self.semithreshold)
+
+            for k in recalls:
+                self.result_dict[self.mode + '_recall'][k].append(recalls[k] / float(gt_entry["gt_relations"].shape[0]))
+                self.video_result_dict[video_id][k] += recalls[k]
+
+            self.video_gt_cnt[video_id] += gt_entry["gt_relations"].shape[0]
+
 
     def visualize(self, gt, pred, data_path, text=True, relation=True):
         label_to_idx, idx_to_label = {}, {}
@@ -357,7 +387,7 @@ class BasicSceneGraphEvaluator:
 
 
 
-def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, method=None, threshold = 0.9, **kwargs):
+def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, k_list, method=None, threshold = 0.9, **kwargs):
     """
     Shortcut to doing evaluate_recall from dict
     :param gt_entry: Dictionary containing gt_relations, gt_boxes, gt_classes
@@ -417,13 +447,15 @@ def evaluate_from_dict(gt_entry, pred_entry, mode, result_dict, method=None, thr
                 predicate_scores, obj_scores, phrdet= mode=='phrdet',
                 **kwargs)
 
+    recalls = {k: 0 for k in k_list}
     for k in result_dict[mode + '_recall']:
+        matchs = reduce(np.union1d, pred_to_gt[:k])
+        #rec_i = float(len(matchs)) / float(gt_rels.shape[0])
+        #result_dict[mode + '_recall'][k].append(rec_i)
+        recalls[k] = float(len(matchs))
 
-        match = reduce(np.union1d, pred_to_gt[:k])
-
-        rec_i = float(len(match)) / float(gt_rels.shape[0])
-        result_dict[mode + '_recall'][k].append(rec_i)
-    return pred_to_gt, pred_5ples, rel_scores
+    return recalls
+    #return pred_to_gt, pred_5ples, rel_scores
 
 ###########################
 def evaluate_recall(gt_rels, gt_boxes, gt_classes,

@@ -14,3 +14,6 @@ dataset/
 **/build
 **/.idea
 **/*.egg-info
+**/*.so
+**/*.o
+data/ag/
