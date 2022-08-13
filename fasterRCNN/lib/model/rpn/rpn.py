@@ -18,7 +18,7 @@ class _RPN(nn.Module):
     """ region proposal network """
     def __init__(self, din):
         super(_RPN, self).__init__()
-        
+
         self.din = din  # get depth of input feature map, e.g., 512
         self.anchor_scales = cfg.ANCHOR_SCALES
         self.anchor_ratios = cfg.ANCHOR_RATIOS
@@ -47,7 +47,7 @@ class _RPN(nn.Module):
     @staticmethod
     def reshape(x, d):
         input_shape = x.size()
-        x = x.view(
+        x = x.contiguous().view(
             input_shape[0],
             int(d),
             int(float(input_shape[1] * input_shape[2]) / float(d)),

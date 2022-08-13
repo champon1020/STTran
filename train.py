@@ -63,8 +63,15 @@ model = STTran(mode=conf.mode,
                obj_classes=dataset_train.object_classes,
                enc_layer_num=conf.enc_layer,
                dec_layer_num=conf.dec_layer).to(device=gpu_device)
-
-model = torch.nn.DataParallel(model, device_ids=[0,1,2])
+"""
+sttran = STTran(mode=conf.mode,
+               attention_class_num=len(dataset_train.attention_relationships),
+               spatial_class_num=len(dataset_train.spatial_relationships),
+               contact_class_num=len(dataset_train.contacting_relationships),
+               obj_classes=dataset_train.object_classes,
+               enc_layer_num=conf.enc_layer,
+               dec_layer_num=conf.dec_layer).to(device=gpu_device)
+"""
 
 evaluator =BasicSceneGraphEvaluator(mode=conf.mode,
                                     AG_object_classes=dataset_train.object_classes,
@@ -74,6 +81,23 @@ evaluator =BasicSceneGraphEvaluator(mode=conf.mode,
                                     AG_contacting_predicates=dataset_train.contacting_relationships,
                                     iou_threshold=0.5,
                                     constraint='with')
+
+"""
+class Model(nn.Module):
+    def __init__(self, detector, model):
+        super().__init__()
+        self.detector = detector
+        self.model = model
+
+    def forward(self, im_data, im_info, gt_boxes, num_boxes, gt_annotation):
+        with torch.no_grad():
+            entry = self.detector(im_data, im_info, gt_boxes, num_boxes, gt_annotation, im_all=None)
+        return self.model(entry)
+
+
+model = nn.DataParallel(Model(object_detector, sttran), device_ids=[0,1])
+"""
+
 
 # loss function, default Multi-label margin loss
 if conf.bce_loss:
@@ -122,6 +146,9 @@ for epoch in range(conf.nepoch):
             entry = object_detector(im_data, im_info, gt_boxes, num_boxes, gt_annotation ,im_all=None)
 
         pred = model(entry)
+        """
+        pred = model(im_data, im_info, gt_boxes, num_boxes, gt_annotation)
+        """
 
         attention_distribution = pred["attention_distribution"]
         spatial_distribution = pred["spatial_distribution"]
@@ -173,7 +200,7 @@ for epoch in range(conf.nepoch):
 
         tr.append(pd.Series({x: y.item() for x, y in losses.items()}))
 
-        if b % 1000 == 0 and b >= 1000:
+        if b % 10 == 0 and b >= 10:
             time_per_batch = (time.time() - start) / 1000
             print("\ne{:2d}  b{:5d}/{:5d}  {:.3f}s/batch, {:.1f}m/epoch".format(epoch, b, len(dataloader_train),
                                                                                 time_per_batch, len(dataloader_train) * time_per_batch / 60))
@@ -181,6 +208,8 @@ for epoch in range(conf.nepoch):
             mn = pd.concat(tr[-1000:], axis=1).mean(1)
             print(mn)
             start = time.time()
+            torch.save({"state_dict": model.state_dict()}, os.path.join(conf.save_path, "model.tar".format(epoch)))
+            print("save the checkpoint after {} epochs and {} steps".format(epoch, b))
 
     torch.save({"state_dict": model.state_dict()}, os.path.join(conf.save_path, "model_{}.tar".format(epoch)))
     print("*" * 40)

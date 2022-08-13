@@ -105,6 +105,8 @@ class VidVRD(Dataset):
 
 
                 gt_annotation_frame = [{'person_bbox': person_bbox[j]['bbox']}]
+                if 'class' in person_bbox[j]:
+                    gt_annotation_frame[0]['person_bbox_class'] = person_bbox[j]['class']
                 # each frames's objects and human
                 for k in object_bbox[j]:
                     if k['visible']:

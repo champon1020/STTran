@@ -18,7 +18,7 @@ class Config(object):
         self.ckpt = None
         self.optimizer = None
         self.bce_loss = None
-        self.lr = 1e-5
+        self.lr = 1e-4
         self.enc_layer = 1
         self.dec_layer = 3
         self.nepoch = 10
