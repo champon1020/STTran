@@ -47,5 +47,5 @@ class Config(object):
         parser.add_argument('-enc_layer', dest='enc_layer', help='spatial encoder layer', default=1, type=int)
         parser.add_argument('-dec_layer', dest='dec_layer', help='temporal decoder layer', default=3, type=int)
         parser.add_argument('-bce_loss', action='store_true')
-        parser.add_argument('-dataset', dest='dataset', default='ag', choices=('ag', 'hag'))
+        parser.add_argument('-dataset', dest='dataset', default='ag', choices=('ag', 'hag', 'vidvrd'))
         return parser

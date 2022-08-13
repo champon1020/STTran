@@ -16,7 +16,7 @@ class detector(nn.Module):
 
     '''first part: object detection (image/video)'''
 
-    def __init__(self, train, object_classes, use_SUPPLY, mode='predcls'):
+    def __init__(self, train, object_classes, use_SUPPLY, mode='predcls', dataset='ag'):
         super(detector, self).__init__()
 
         self.is_train = train
@@ -26,7 +26,10 @@ class detector(nn.Module):
 
         self.fasterRCNN = resnet(classes=self.object_classes, num_layers=101, pretrained=False, class_agnostic=False)
         self.fasterRCNN.create_architecture()
-        checkpoint = torch.load('fasterRCNN/models/faster_rcnn_ag.pth')
+        if dataset == 'ag':
+            checkpoint = torch.load('fasterRCNN/models/faster_rcnn_ag.pth')
+        elif dataset == 'vidvrd':
+            checkpoint = torch.load('fasterRCNN/models/faster_rcnn_vidvrd.pth')
         self.fasterRCNN.load_state_dict(checkpoint['model'])
 
         self.ROI_Align = copy.deepcopy(self.fasterRCNN.RCNN_roi_align)
@@ -117,6 +120,10 @@ class detector(nn.Module):
 
                 counter += 10
             FINAL_BBOXES = torch.clamp(FINAL_BBOXES, 0)
+            #print(FINAL_BBOXES)
+            if FINAL_BBOXES.shape[0] == 0:
+                FINAL_BBOXES = FINAL_BBOXES.reshape(0, 5)
+            #print(FINAL_BBOXES)
             prediction = {'FINAL_BBOXES': FINAL_BBOXES, 'FINAL_LABELS': FINAL_LABELS, 'FINAL_SCORES': FINAL_SCORES,
                           'FINAL_FEATURES': FINAL_FEATURES, 'FINAL_BASE_FEATURES': FINAL_BASE_FEATURES}
 
@@ -219,6 +226,8 @@ class detector(nn.Module):
                 union_feat = self.fasterRCNN.RCNN_roi_align(FINAL_BASE_FEATURES, union_boxes)
 
                 pair_rois = torch.cat((FINAL_BBOXES_X[pair[:,0],1:],FINAL_BBOXES_X[pair[:,1],1:]), 1).data.cpu().numpy()
+                pair_rois[:, 4:] += 1e-8
+                #print(pair_rois, pair_rois.shape)
                 spatial_masks = torch.tensor(draw_union_boxes(pair_rois, 27) - 0.5).to(FINAL_FEATURES.device)
 
                 entry = {'boxes': FINAL_BBOXES_X,
@@ -388,4 +397,3 @@ class detector(nn.Module):
                              'im_info': im_info[0, 2]}
 
                     return entry
-

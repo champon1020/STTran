@@ -166,6 +166,7 @@ relationship_types = {
     "jump_with": "c",
     "lie_front": "s",
     "left": "s",
+    "unsure": "a",
 }
 
 
@@ -245,13 +246,16 @@ def process(annot_files, image_set):
                 object_bbox_and_relationship[image_id_with_sbj_tid] = []
                 for obj_tid, rel_labels in objects_dict.items():
                     s, a, c = convert_rel_type(rel_labels)
+                    obj_bbox = obj_tid_to_bbox[obj_tid]
+                    obj_bbox = (obj_bbox[0], obj_bbox[1], obj_bbox[2]-obj_bbox[0], obj_bbox[3]-obj_bbox[1]) #xywh
+                    a_rel = ['unsure'] if len(a) == 0 else [a[0]]
                     obj_dict = {
                         "class": obj_tid_to_label[obj_tid],
-                        "bbox": obj_tid_to_bbox[obj_tid],
-                        "attention_relationship": a,
+                        "bbox": obj_bbox,
+                        "attention_relationship": a_rel,
                         "spatial_relationship": s,
                         "contacting_relationship": c,
-                        "visible": True,
+                        "visible": False if len(a+s+c) == 0 else True,
                         "metadata": {
                             "tag": image_id,
                             "set": image_set,

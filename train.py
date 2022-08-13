@@ -8,9 +8,11 @@ import time
 import os
 import pandas as pd
 import copy
+from tqdm import tqdm
 
 from dataloader.action_genome import AG, cuda_collate_fn
 from dataloader.home_action_genome import HAG
+from dataloader.vidvrd import VidVRD
 from lib.object_detector import detector
 from lib.config import Config
 from lib.evaluation_recall import BasicSceneGraphEvaluator
@@ -36,21 +38,22 @@ if conf.dataset == 'ag':
                      filter_small_box=False if conf.mode == 'predcls' else True)
     dataloader_test = torch.utils.data.DataLoader(dataset_test, shuffle=False, num_workers=4,
                                               collate_fn=cuda_collate_fn, pin_memory=False)
-elif conf.dataset == 'hag':
-    dataset_train = HAG(mode="train", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
+elif conf.dataset == 'vidvrd':
+    dataset_train = VidVRD(mode="train", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
                     filter_small_box=False)
-    dataloader_train = torch.utils.data.DataLoader(dataset_train, shuffle=True, num_workers=4,
-                                               collate_fn=cuda_collate_fn, pin_memory=False)
-    dataset_test = HAG(mode="test", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
+    dataloader_train = torch.utils.data.DataLoader(dataset_train, batch_size=1, shuffle=True, num_workers=2,
+                                               collate_fn=cuda_collate_fn, pin_memory=True)
+    dataset_test = VidVRD(mode="test", datasize=conf.datasize, data_path=conf.data_path, filter_nonperson_box_frame=True,
                     filter_small_box=False)
-    dataloader_test = torch.utils.data.DataLoader(dataset_test, shuffle=False, num_workers=4,
-                                              collate_fn=cuda_collate_fn, pin_memory=False)
+    dataloader_test = torch.utils.data.DataLoader(dataset_test, batch_size=1, shuffle=False, num_workers=2,
+                                                  collate_fn=cuda_collate_fn, pin_memory=True)
 else:
     raise ValueError('not supported dataset type:', conf.dataset)
 
-gpu_device = torch.device("cuda:0")
+#gpu_device = torch.device("cuda:0")
+gpu_device = "cuda"
 # freeze the detection backbone
-object_detector = detector(train=True, object_classes=dataset_train.object_classes, use_SUPPLY=True, mode=conf.mode).to(device=gpu_device)
+object_detector = detector(train=True, object_classes=dataset_train.object_classes, use_SUPPLY=True, mode=conf.mode, dataset=conf.dataset).to(device=gpu_device)
 object_detector.eval()
 
 model = STTran(mode=conf.mode,
@@ -60,6 +63,8 @@ model = STTran(mode=conf.mode,
                obj_classes=dataset_train.object_classes,
                enc_layer_num=conf.enc_layer,
                dec_layer_num=conf.dec_layer).to(device=gpu_device)
+
+model = torch.nn.DataParallel(model, device_ids=[0,1,2])
 
 evaluator =BasicSceneGraphEvaluator(mode=conf.mode,
                                     AG_object_classes=dataset_train.object_classes,
@@ -91,13 +96,19 @@ scheduler = ReduceLROnPlateau(optimizer, "max", patience=1, factor=0.5, verbose=
 # some parameters
 tr = []
 
+s_rel_classes = 6
+c_rel_classes = 17
+if conf.dataset == 'vidvrd':
+    s_rel_classes = 100
+    c_rel_classes = 17
+
 for epoch in range(conf.nepoch):
     model.train()
     object_detector.is_train = True
     start = time.time()
     train_iter = iter(dataloader_train)
     test_iter = iter(dataloader_test)
-    for b in range(len(dataloader_train)):
+    for b in tqdm(range(len(dataloader_train))):
         data = next(train_iter)
 
         im_data = copy.deepcopy(data[0].cuda(0))
@@ -119,16 +130,16 @@ for epoch in range(conf.nepoch):
         attention_label = torch.tensor(pred["attention_gt"], dtype=torch.long).to(device=attention_distribution.device).squeeze()
         if not conf.bce_loss:
             # multi-label margin loss or adaptive loss
-            spatial_label = -torch.ones([len(pred["spatial_gt"]), 6], dtype=torch.long).to(device=attention_distribution.device)
-            contact_label = -torch.ones([len(pred["contacting_gt"]), 17], dtype=torch.long).to(device=attention_distribution.device)
+            spatial_label = -torch.ones([len(pred["spatial_gt"]), s_rel_classes], dtype=torch.long).to(device=attention_distribution.device)
+            contact_label = -torch.ones([len(pred["contacting_gt"]), c_rel_classes], dtype=torch.long).to(device=attention_distribution.device)
             for i in range(len(pred["spatial_gt"])):
                 spatial_label[i, : len(pred["spatial_gt"][i])] = torch.tensor(pred["spatial_gt"][i])
                 contact_label[i, : len(pred["contacting_gt"][i])] = torch.tensor(pred["contacting_gt"][i])
 
         else:
             # bce loss
-            spatial_label = torch.zeros([len(pred["spatial_gt"]), 6], dtype=torch.float32).to(device=attention_distribution.device)
-            contact_label = torch.zeros([len(pred["contacting_gt"]), 17], dtype=torch.float32).to(device=attention_distribution.device)
+            spatial_label = torch.zeros([len(pred["spatial_gt"]), s_rel_classes], dtype=torch.float32).to(device=attention_distribution.device)
+            contact_label = torch.zeros([len(pred["contacting_gt"]), c_rel_classes], dtype=torch.float32).to(device=attention_distribution.device)
             for i in range(len(pred["spatial_gt"])):
                 spatial_label[i, pred["spatial_gt"][i]] = 1
                 contact_label[i, pred["contacting_gt"][i]] = 1
@@ -137,6 +148,14 @@ for epoch in range(conf.nepoch):
         if conf.mode == 'sgcls' or conf.mode == 'sgdet':
             losses['object_loss'] = ce_loss(pred['distribution'], pred['labels'])
 
+        """
+        print("attention_distribution:", attention_distribution.shape)
+        print("attention_label:", attention_label.shape)
+        print("spatial_distribution:", spatial_distribution.shape)
+        print("spatial_label:", spatial_label.shape)
+        print("contact_distribution:", contact_distribution.shape)
+        print("contact_label:", contact_label.shape)
+        """
         losses["attention_relation_loss"] = ce_loss(attention_distribution, attention_label)
         if not conf.bce_loss:
             losses["spatial_relation_loss"] = mlm_loss(spatial_distribution, spatial_label)
