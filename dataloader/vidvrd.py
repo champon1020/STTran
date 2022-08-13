@@ -10,7 +10,7 @@ import os
 from fasterRCNN.lib.model.utils.blob import prep_im_for_blob, im_list_to_blob
 
 class VidVRD(Dataset):
-    def __init__(self, mode, datasize, video_id=None, data_path=None, filter_nonperson_box_frame=True, filter_small_box=False):
+    def __init__(self, mode, datasize, video_id="ILSVRC2015_train_00005004.mp4", data_path=None, filter_nonperson_box_frame=True, filter_small_box=False):
 
         root_path = data_path
         self.frames_path = os.path.join(root_path, 'frames/')
