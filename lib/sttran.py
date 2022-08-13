@@ -224,6 +224,7 @@ class ObjectClassifier(nn.Module):
                 global_idx = torch.arange(0, entry['boxes'].shape[0])
 
                 for i in range(b):
+                    #print("entry distribution:", entry['distribution'].shape)
                     local_human_idx = torch.argmax(entry['distribution'][
                                                        box_idx == i, 0])  # the local bbox index with highest human score in this frame
                     HUMAN_IDX[i] = global_idx[box_idx == i][local_human_idx]

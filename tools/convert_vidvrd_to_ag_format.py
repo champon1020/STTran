@@ -234,6 +234,7 @@ def process(annot_files, image_set):
                     "bbox": np.array([sbj_bbox]),
                     "bbox_size": (w, h),
                     "bbox_mode": "xyxy",
+                    "class": sbj_label,
                 }
 
                 objects_dict = {}

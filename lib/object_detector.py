@@ -147,12 +147,12 @@ class detector(nn.Module):
                             for m, n in enumerate(j):
                                 # if person box is missing or objects
                                 if 'bbox' in n.keys():
-                                    unfound_gt_bboxes[m, 1:] = torch.tensor(n['bbox']) * im_info[
+                                    unfound_gt_bboxes[m, 1:] = torch.tensor(n['bbox']).cuda() * im_info[
                                         i, 2]  # don't forget scaling!
                                     unfound_gt_classes[m] = n['class']
                                 else:
                                     # here happens always that IOU <0.5 but not unfounded
-                                    unfound_gt_bboxes[m, 1:] = torch.tensor(n['person_bbox']) * im_info[
+                                    unfound_gt_bboxes[m, 1:] = torch.tensor(n['person_bbox']).cuda() * im_info[
                                         i, 2]  # don't forget scaling!
                                     unfound_gt_classes[m] = 1  # person class index
 
