@@ -126,7 +126,7 @@ class AG(Dataset):
                         self.valid_nums += 1
 
 
-                gt_annotation_frame = [{'person_bbox': person_bbox[j]['bbox']}]
+                gt_annotation_frame = [{'person_bbox': person_bbox[j]['bbox'], 'frame_id': j}]
                 # each frames's objects and human
                 for k in object_bbox[j]:
                     if k['visible']:

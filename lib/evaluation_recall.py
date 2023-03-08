@@ -8,6 +8,7 @@ from functools import reduce
 from lib.ults.pytorch_misc import intersect_2d, argsort_desc
 from lib.fpn.box_intersections_cpu.bbox import bbox_overlaps
 from PIL import Image
+import json
 
 class BasicSceneGraphEvaluator:
     def __init__(self, mode, AG_object_classes, AG_all_predicates, AG_attention_predicates, AG_spatial_predicates, AG_contacting_predicates,
@@ -30,6 +31,7 @@ class BasicSceneGraphEvaluator:
         self.AG_spatial_predicates = AG_spatial_predicates
         self.AG_contacting_predicates = AG_contacting_predicates
         self.semithreshold = semithreshold
+        self.results_targets = {}
 
     def reset_result(self):
         #self.result_dict[self.mode + '_recall'] = {1:[], 3:[], 5:[], 10: [], 20: [], 50: [], 100: []}
@@ -119,6 +121,8 @@ class BasicSceneGraphEvaluator:
                     'rel_scores': np.concatenate((pred_scores_1, pred_scores_2, pred_scores_3), axis=0)
                 }
 
+            self.save_results(pred_entry, gt_entry, frame_gt)
+
             recalls = evaluate_from_dict(gt_entry, pred_entry, self.mode, self.result_dict, self.k_list,
                                iou_thresh=self.iou_threshold, method=self.constraint, threshold=self.semithreshold)
 
@@ -127,6 +131,71 @@ class BasicSceneGraphEvaluator:
                 self.video_result_dict[video_id][k] += recalls[k]
 
             self.video_gt_cnt[video_id] += gt_entry["gt_relations"].shape[0]
+
+
+    def save_results(self, pred_entry, gt_entry, frame_gt):
+        gt_rels = gt_entry['gt_relations']
+        gt_boxes = gt_entry['gt_boxes'].astype(float)
+        gt_classes = gt_entry['gt_classes']
+
+        pred_rel_inds = pred_entry['pred_rel_inds']
+        rel_scores = pred_entry['rel_scores']
+
+
+        pred_boxes = pred_entry['pred_boxes'].astype(float)
+        pred_classes = pred_entry['pred_classes']
+        obj_scores = pred_entry['obj_scores']
+
+        method = self.constraint
+        if method == 'semi':
+            pred_rels = []
+            predicate_scores = []
+            for i, j in enumerate(pred_rel_inds):
+                if rel_scores[i,0]+rel_scores[i,1] > 0:
+                    # this is the attention distribution
+                    pred_rels.append(np.append(j,rel_scores[i].argmax()))
+                    predicate_scores.append(rel_scores[i].max())
+                elif rel_scores[i,3]+rel_scores[i,4] > 0:
+                    # this is the spatial distribution
+                    for k in np.where(rel_scores[i]>threshold)[0]:
+                        pred_rels.append(np.append(j, k))
+                        predicate_scores.append(rel_scores[i,k])
+                elif rel_scores[i,9]+rel_scores[i,10] > 0:
+                    # this is the contact distribution
+                    for k in np.where(rel_scores[i]>threshold)[0]:
+                        pred_rels.append(np.append(j, k))
+                        predicate_scores.append(rel_scores[i,k])
+
+            pred_rels = np.array(pred_rels)
+            predicate_scores = np.array(predicate_scores)
+        elif method == 'no':
+            obj_scores_per_rel = obj_scores[pred_rel_inds].prod(1)
+            overall_scores = obj_scores_per_rel[:, None] * rel_scores
+            score_inds = argsort_desc(overall_scores)[:100]
+            pred_rels = np.column_stack((pred_rel_inds[score_inds[:, 0]], score_inds[:, 1]))
+            predicate_scores = rel_scores[score_inds[:, 0], score_inds[:, 1]]
+        else:
+            pred_rels = np.column_stack((pred_rel_inds, rel_scores.argmax(1))) #1+  dont add 1 because no dummy 'no relations'
+            predicate_scores = rel_scores.max(1)
+
+        if pred_rels.size == 0:
+            return [[]], np.zeros((0,5)), np.zeros(0)
+
+        frame_id = frame_gt[0]['frame_id']
+        self.results_targets[frame_id] = {
+            "result": {
+                "boxes": pred_boxes.tolist(),
+                "labels": pred_classes.tolist(),
+                "rels": pred_rels.tolist(),
+                "scores": obj_scores.tolist(),
+                "rel_scores": predicate_scores.tolist(),
+            },
+            "target": {
+                "rels": gt_rels.tolist(),
+                "boxes": gt_boxes.tolist(),
+                "labels": gt_classes.tolist(),
+            },
+        }
 
 
     def visualize(self, gt, pred, data_path, text=True, relation=True):
@@ -154,6 +223,7 @@ class BasicSceneGraphEvaluator:
 
         pred['attention_distribution'] = nn.functional.softmax(pred['attention_distribution'], dim=1)
 
+        results_targets = {}
         for idx, frame_gt in enumerate(gt):
             # generate the ground truth
             gt_boxes = np.zeros([len(frame_gt), 4]) #now there is no person box! we assume that person box index == 0
@@ -260,6 +330,24 @@ class BasicSceneGraphEvaluator:
             if pred_rels.size == 0:
                 return [[]], np.zeros((0,5)), np.zeros(0)
 
+            """
+            frame_id = frame_gt[0]['frame_id']
+            results_targets[frame_id] = {
+                "result": {
+                    "boxes": pred_boxes.tolist(),
+                    "labels": pred_classes.tolist(),
+                    "rels": pred_rels.tolist(),
+                    "scores": obj_scores.tolist(),
+                    "rel_scores": rel_scores.tolist(),
+                },
+                "target": {
+                    "rels": gt_rels.tolist(),
+                    "boxes": gt_boxes.tolist(),
+                    "labels": gt_classes.tolist(),
+                },
+            }
+            """
+
             num_gt_boxes = gt_boxes.shape[0]
             num_gt_relations = gt_rels.shape[0]
             assert num_gt_relations != 0
@@ -275,26 +363,27 @@ class BasicSceneGraphEvaluator:
             # assert np.all(pred_rels[:,0] != pred_rels[:,ĺeftright])
             #assert np.all(pred_rels[:,2] > 0)
 
-            cls_scores=None
+            cls_scores=obj_scores
             pred_triplets, pred_triplet_boxes, relation_scores = \
               _triplet(pred_rels[:,2], pred_rels[:,:2], pred_classes, pred_boxes,
-                       rel_scores, cls_scores)
+                       predicate_scores, cls_scores)
 
-            relation_scores = rel_scores
+            #relation_scores = rel_scores
             sorted_scores = relation_scores.prod(1)
             pred_triplets = pred_triplets[sorted_scores.argsort()[::-1],:]
             pred_triplet_boxes = pred_triplet_boxes[sorted_scores.argsort()[::-1],:]
             relation_scores = relation_scores[sorted_scores.argsort()[::-1],:]
             scores_overall = relation_scores.prod(1)
 
-            top = 10
+            top = 5
             frame_name = frame_gt[1]["metadata"]["tag"].split("/")
             frame_name = "/".join(frame_name[:-2] + frame_name[-1:]) + ".png"
             video_id = frame_name.split("/")[0]
             image = Image.open(op.join(data_path, "frames", frame_name))
             triplets, boxes = pred_triplets[:top], pred_triplet_boxes[:top]
+            box_img = np.array(image.copy())
+            box_img = cv2.cvtColor(box_img, cv2.COLOR_RGB2BGR)
             for i, (triplet, box) in enumerate(zip(triplets, boxes)):
-                img = np.array(image.copy())
                 if triplet[1].item() == -1:
                     continue
                 sub, obj = (
@@ -305,17 +394,18 @@ class BasicSceneGraphEvaluator:
                     np.round(box[:4]).astype(int),
                     np.round(box[4:]).astype(int),
                 )
-                cv2.rectangle(img, sub_box[:2], sub_box[2:], (0, 0, 255), thickness=4)
-                cv2.rectangle(img, obj_box[:2], obj_box[2:], (0, 0, 255), thickness=4)
+                cv2.rectangle(box_img , sub_box[:2], sub_box[2:], OBJECT_TO_BGR[sub], thickness=4)
+                cv2.rectangle(box_img , obj_box[:2], obj_box[2:], OBJECT_TO_BGR[obj], thickness=4)
 
-                basename, ext = op.splitext(frame_name)
-                output_name = op.join("./results", f"{basename}_box{ext}")
-                if not op.exists(op.dirname(output_name)):
-                    os.mkdir(op.dirname(output_name))
-                cv2.imwrite(output_name, img)
+            basename, ext = op.splitext(frame_name)
+            output_name = op.join("./results", f"{basename}_box{ext}")
+            if not op.exists(op.dirname(output_name)):
+                os.mkdir(op.dirname(output_name))
+            cv2.imwrite(output_name, box_img)
 
             for i, (triplet, box) in enumerate(zip(triplets, boxes)):
                 img = np.array(image.copy())
+                img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
                 if triplet[1].item() == -1:
                     continue
                 sub, pre, obj = (
@@ -327,9 +417,9 @@ class BasicSceneGraphEvaluator:
                     np.round(box[:4]).astype(int),
                     np.round(box[4:]).astype(int),
                 )
-                cv2.rectangle(img, sub_box[:2], sub_box[2:], (0, 0, 255), thickness=2)
+                cv2.rectangle(img, sub_box[:2], sub_box[2:], OBJECT_TO_BGR[sub], thickness=2)
                 cv2.rectangle(
-                    img, obj_box[:2], obj_box[2:], (245, 239, 24), thickness=2
+                    img, obj_box[:2], obj_box[2:], OBJECT_TO_BGR[obj], thickness=2
                 )
                 if text:
                     cv2.putText(
@@ -338,7 +428,7 @@ class BasicSceneGraphEvaluator:
                         org=sub_box[:2] - np.array([0, 5]),
                         fontFace=cv2.FONT_HERSHEY_SIMPLEX,
                         fontScale=0.7,
-                        color=(0, 0, 255),
+                        color=OBJECT_TO_BGR[sub],
                         thickness=1,
                         lineType=cv2.LINE_AA,
                     )
@@ -348,7 +438,7 @@ class BasicSceneGraphEvaluator:
                         org=obj_box[:2] - np.array([0, 5]),
                         fontFace=cv2.FONT_HERSHEY_SIMPLEX,
                         fontScale=0.7,
-                        color=(245, 239, 24),
+                        color=OBJECT_TO_BGR[obj],
                         thickness=1,
                         lineType=cv2.LINE_AA,
                     )
@@ -384,6 +474,11 @@ class BasicSceneGraphEvaluator:
                 if not op.exists(op.dirname(output_name)):
                     os.mkdir(op.dirname(output_name))
                 cv2.imwrite(output_name, img)
+
+        """
+        with open("results/results.json", "w") as fp:
+            json.dump(results_targets, fp)
+        """
 
 
 
@@ -601,3 +696,75 @@ def _compute_pred_matches(gt_triplets, pred_triplets,
         for i in np.where(keep_inds)[0][inds]:
             pred_to_gt[i].append(int(gt_ind))
     return pred_to_gt
+
+OBJECT_TO_BGR = {
+    "person": (0, 0, 255),
+    "bag": (13, 76, 231),
+    "bed": (252, 8, 102),
+    "blanket": (255, 13, 145),
+    "book": (8, 90, 192),
+    "box": (154, 62, 6),
+    "broom": (6, 184, 163),
+    "chair": (132, 203, 16),
+    "closetcabinet": (4, 152, 7),
+    "clothes": (4, 152, 7),
+    "cupglassbottle": (132, 214, 220),
+    "dish": (157, 111, 190),
+    "door": (152, 227, 68),
+    "doorknob": (214, 193, 41),
+    "doorway": (217, 69, 116),
+    "floor": (14, 117, 4),
+    "food": (243, 20, 181),
+    "groceries": (203, 171, 24),
+    "laptop": (173, 135, 122),
+    "light": (88, 39, 124),
+    "medicine": (66, 64, 83),
+    "mirror": (82, 132, 38),
+    "papernotebook": (129, 231, 49),
+    "phonecamera": (157, 74, 152),
+    "picture": (138, 69, 109),
+    "pillow": (124, 13, 250),
+    "refrigerator": (63, 62, 109),
+    "sandwich": (100, 142, 74),
+    "shelf": (128, 246, 185),
+    "shoe": (167, 112, 96),
+    "sofacouch": (98, 156, 162),
+    "table": (95, 170, 5),
+    "television": (117, 174, 248),
+    "towel": (144, 179, 189),
+    "vacuum": (126, 106, 135),
+    "window": (201, 178, 116),
+    "turtle": (227, 56, 70),
+    "antelope": (108, 232, 158),
+    "bicycle": (206, 239, 174),
+    "lion": (34, 116, 19),
+    "ball": (118, 69, 123),
+    "motorcycle": (148, 34, 227),
+    "cattle": (198, 23, 12),
+    "airplane": (190, 137, 27),
+    "red_panda": (112, 200, 140),
+    "horse": (187, 188, 102),
+    "watercraft": (18, 94, 106),
+    "monkey": (7, 255, 141),
+    "fox": (37, 192, 160),
+    "elephant": (36, 28, 186),
+    "bird": (169, 218, 231),
+    "sheep": (106, 135, 153),
+    "frisbee": (221, 125, 65),
+    "giant_panda": (120, 122, 105),
+    "squirrel": (141, 236, 46),
+    "bus": (70, 47, 189),
+    "bear": (220, 185, 227),
+    "tiger": (13, 202, 247),
+    "train": (215, 20, 57),
+    "snake": (12, 134, 220),
+    "rabbit": (38, 100, 248),
+    "whale": (27, 86, 172),
+    "sofa": (248, 65, 255),                                                                                                              "skateboard": (84, 205, 165),
+    "dog": (178, 186, 40),
+    "domestic_cat": (10, 48, 10),
+    "lizard": (21, 130, 135),
+    "hamster": (160, 45, 203),
+    "car": (86, 132, 169),
+    "zebra": (0, 213, 136),
+}

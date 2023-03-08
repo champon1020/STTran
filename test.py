@@ -1,3 +1,4 @@
+import json
 import numpy as np
 
 np.set_printoptions(precision=4)
@@ -128,6 +129,9 @@ with torch.no_grad():
         # evaluator1.evaluate_scene_graph(gt_annotation, dict(pred))
         # evaluator2.evaluate_scene_graph(gt_annotation, dict(pred))
         evaluator3.evaluate_scene_graph(gt_annotation, dict(pred))
+
+with open("results/results.json", "w") as fp:
+    json.dump(evaluator3.results_targets, fp)
 
 
 #print("-------------------------with constraint-------------------------------")
